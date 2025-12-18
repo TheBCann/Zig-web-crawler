@@ -21,5 +21,5 @@ A high-performance, async web crawler written in Zig. This tool connects to a se
 To build and run the crawler in one step:
 
 ```bash
-zig build run -- [https://ziglang.org](https://ziglang.org)
+zig build run
 ```
