@@ -13,13 +13,3 @@ A high-performance, async web crawler written in Zig. This tool connects to a se
 
 - **Zig 0.16.0-dev (Nightly)**
   - _Note: This project relies on the experimental `std.Io` module which is only available in recent nightly builds._
-
-## Building & Running
-
-### Quick Start
-
-To build and run the crawler in one step:
-
-```bash
-zig build run
-```
