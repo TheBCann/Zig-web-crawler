@@ -1,20 +1,17 @@
 const std = @import("std");
 
-// "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+// User Agent string
 const USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 
-// A struct to manage the chaos of multiple threads
+// Global Mutex for synchronized printing
+var stdout_mutex = std.Thread.Mutex{};
+
 const Spider = struct {
     allocator: std.mem.Allocator,
-
-    // Shared Data (Protected by Mutex)
     mutex: std.Thread.Mutex = .{},
     queue: std.ArrayList([]const u8),
     visited: std.StringHashMap(void),
-
-    // Status
     base_host: []const u8,
-    // max_urls: usize = 100, // Safety brake!
 
     pub fn init(allocator: std.mem.Allocator, seed_url: []const u8) !Spider {
         const uri = try std.Uri.parse(seed_url);
@@ -36,13 +33,11 @@ const Spider = struct {
 
     pub fn deinit(self: *Spider) void {
         self.allocator.free(self.base_host);
-
         var it = self.visited.keyIterator();
         while (it.next()) |key| {
             self.allocator.free(key.*);
         }
         self.visited.deinit();
-
         for (self.queue.items) |item| {
             self.allocator.free(item);
         }
@@ -52,7 +47,6 @@ const Spider = struct {
     pub fn getNextUrl(self: *Spider) ?[]const u8 {
         self.mutex.lock();
         defer self.mutex.unlock();
-
         if (self.queue.items.len == 0) return null;
         return self.queue.pop();
     }
@@ -60,84 +54,62 @@ const Spider = struct {
     pub fn addUrl(self: *Spider, url: []const u8) !void {
         self.mutex.lock();
         defer self.mutex.unlock();
-
-        // if (self.visited.count() >= self.max_urls) return;
         if (self.visited.contains(url)) return;
 
         const url_owned = try self.allocator.dupe(u8, url);
         try self.visited.put(url_owned, {});
-
         try self.queue.append(self.allocator, try self.allocator.dupe(u8, url));
     }
 };
-
-// Global Mutex for stdout
-var stdout_mutex = std.Thread.Mutex{};
 
 pub fn main() !void {
     var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    // 1. Setup
+    var threaded: std.Io.Threaded = .init(allocator);
+    defer threaded.deinit();
+    const io = threaded.io();
+
     var args = std.process.args();
     _ = args.next();
     const seed = args.next() orelse {
-        var buf: [1024]u8 = undefined;
-        var fbs = std.Io.fixedBufferStream(&buf);
-        fbs.writer().print("Usage: ./spider <url>\n", .{}) catch {};
-        std.fs.File.stdout().writeAll(fbs.getWritten()) catch {};
+        safePrint("Usage: ./spider <url>\n", .{});
         return;
     };
 
     var spider = try Spider.init(allocator, seed);
     defer spider.deinit();
 
-    // 2. Spawn Workers
-    var threads = std.ArrayList(std.Thread){};
-    defer threads.deinit(allocator);
-
     const worker_count = 4;
+    safePrint("🕷️  Starting Spider on {s} with {d} async tasks...\n", .{ seed, worker_count });
 
-    // Print Start Message
-    {
-        var buf: [1024]u8 = undefined;
-        var fbs = std.Io.fixedBufferStream(&buf);
-        fbs.writer().print("🕷️  Starting Spider on {s} with {d} threads...\n", .{ seed, worker_count }) catch {};
-        std.fs.File.stdout().writeAll(fbs.getWritten()) catch {};
-    }
+    var futures = std.ArrayList(std.Io.Future(anyerror!void)).empty;
+    defer futures.deinit(allocator);
 
     for (0..worker_count) |_| {
-        const t = try std.Thread.spawn(.{}, worker, .{ allocator, &spider });
-        try threads.append(allocator, t);
+        // We call the worker which now explicitly returns `anyerror!void`
+        // so it matches the ArrayList type.
+        const fut = try io.concurrent(worker, .{ io, allocator, &spider });
+        try futures.append(allocator, fut);
     }
 
-    // 3. Wait
-    for (threads.items) |t| {
-        t.join();
+    for (futures.items) |*fut| {
+        try fut.await(io);
     }
 
-    // Print Finish Message
-    {
-        var buf: [1024]u8 = undefined;
-        var fbs = std.Io.fixedBufferStream(&buf);
-        fbs.writer().print("\n🏁 Crawl finished. Visited {d} pages.\n", .{spider.visited.count()}) catch {};
-        std.fs.File.stdout().writeAll(fbs.getWritten()) catch {};
-    }
+    safePrint("\n🏁 Crawl finished. Visited {d} pages.\n", .{spider.visited.count()});
 }
 
-fn worker(allocator: std.mem.Allocator, spider: *Spider) void {
-    var buf: [4096]u8 = undefined;
-    var fbs = std.Io.fixedBufferStream(&buf);
-    const stdout = std.fs.File.stdout();
-
+// FIX 1: Explicit `anyerror!void` return type to match futures list
+fn worker(io: std.Io, allocator: std.mem.Allocator, spider: *Spider) anyerror!void {
     var retries: usize = 0;
 
     while (retries < 10) {
         const target_url_opt = spider.getNextUrl();
 
         if (target_url_opt == null) {
-            std.Thread.sleep(100 * std.time.ns_per_ms);
+            try io.sleep(std.Io.Duration.fromNanoseconds(100 * std.time.ns_per_ms), .awake);
             retries += 1;
             continue;
         }
@@ -148,40 +120,34 @@ fn worker(allocator: std.mem.Allocator, spider: *Spider) void {
 
         const uri = std.Uri.parse(target_url) catch continue;
 
-        var client = std.http.Client{ .allocator = allocator };
+        var client = std.http.Client{ .allocator = allocator, .io = io };
         defer client.deinit();
 
+        // FIX 2: Use std.Io.Writer.Allocating instead of ArrayList
+        // This provides the .writer interface the new I/O system expects.
         var body = std.Io.Writer.Allocating.init(allocator);
         defer body.deinit();
 
-        const bodywriter = &body.writer;
+        // This .writer field is the interface struct (std.Io.Writer)
+        const body_interface = &body.writer;
 
         const response = client.fetch(.{
             .method = .GET,
             .location = .{ .uri = uri },
-            .response_writer = bodywriter,
-            // FIX: Add User-Agent and keep compression disabled
+            .response_writer = body_interface,
             .headers = .{
                 .accept_encoding = .{ .override = "identity" },
                 .user_agent = .{ .override = USER_AGENT },
             },
         }) catch {
-            fbs.reset();
-            fbs.writer().print("❌ Error fetching {s}\n", .{target_url}) catch {};
-            stdout_mutex.lock();
-            stdout.writeAll(fbs.getWritten()) catch {};
-            stdout_mutex.unlock();
+            safePrint("❌ Error fetching {s}\n", .{target_url});
             continue;
         };
 
-        fbs.reset();
-        fbs.writer().print("[{d}] {s}\n", .{ response.status, target_url }) catch {};
-
-        stdout_mutex.lock();
-        stdout.writeAll(fbs.getWritten()) catch {};
-        stdout_mutex.unlock();
-
+        // safePrint("[{d}] {s}\n", .{ response.status, target_url });
+        safePrint("\x1b[32m[{d}]\x1b[0m {s}\n", .{ response.status, target_url });
         if (response.status == .ok) {
+            // .written() returns the []const u8 slice of data
             const html = body.written();
             var it = std.mem.splitScalar(u8, html, '>');
 
@@ -192,30 +158,33 @@ fn worker(allocator: std.mem.Allocator, spider: *Spider) void {
 
                     if (std.mem.indexOf(u8, remainder, "\"")) |quote_end| {
                         const raw_url = remainder[0..quote_end];
-
-                        // --- URL NORMALIZATION & FILTERING ---
-
-                        // 1. Protocol Relative (//ads.google.com)
+                        // URL Normalization
                         if (std.mem.startsWith(u8, raw_url, "//")) {
-                            const full_url = std.fmt.allocPrint(allocator, "https:{s}", .{raw_url}) catch continue;
-                            defer allocator.free(full_url);
-                            spider.addUrl(full_url) catch {};
-                        }
-                        // 2. Root Relative (/about.html)
-                        else if (std.mem.startsWith(u8, raw_url, "/")) {
-                            const full_url = std.fmt.allocPrint(allocator, "https://{s}{s}", .{ spider.base_host, raw_url }) catch continue;
-                            defer allocator.free(full_url);
-                            spider.addUrl(full_url) catch {};
-                        }
-                        // 3. Absolute HTTP/S (https://google.com)
-                        else if (std.mem.startsWith(u8, raw_url, "http")) {
-                            const full_url = allocator.dupe(u8, raw_url) catch continue;
-                            defer allocator.free(full_url);
-                            spider.addUrl(full_url) catch {};
+                            const full = std.fmt.allocPrint(allocator, "https:{s}", .{raw_url}) catch continue;
+                            defer allocator.free(full);
+                            spider.addUrl(full) catch {};
+                        } else if (std.mem.startsWith(u8, raw_url, "/")) {
+                            const full = std.fmt.allocPrint(allocator, "https://{s}{s}", .{ spider.base_host, raw_url }) catch continue;
+                            defer allocator.free(full);
+                            spider.addUrl(full) catch {};
+                        } else if (std.mem.startsWith(u8, raw_url, "http")) {
+                            spider.addUrl(raw_url) catch {};
                         }
                     }
                 }
             }
         }
     }
+}
+
+fn safePrint(comptime fmt: []const u8, args: anytype) void {
+    stdout_mutex.lock();
+    defer stdout_mutex.unlock();
+
+    var buf: [4096]u8 = undefined;
+    var stdout_buffered = std.fs.File.stdout().writer(&buf);
+    const stdout = &stdout_buffered.interface;
+
+    stdout.print(fmt, args) catch {};
+    stdout.flush() catch {};
 }

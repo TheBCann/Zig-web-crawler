@@ -1,23 +1,25 @@
 # Zig Web Crawler
 
-A high-performance, multi-threaded web crawler written in Zig. This tool connects to a seed URL, extracts links, and recursively visits them using a thread pool.
+A high-performance, async web crawler written in Zig. This tool connects to a seed URL, extracts links, and recursively visits them using Zig's experimental `std.Io` async runtime.
 
 ## Features
 
-- **Multi-threaded:** Spawns multiple workers to crawl pages concurrently.
-- **Custom HTML Parsing:** Uses a manual, zero-allocation string splitting method to find `href` tags.
-- **Polite Crawling:** Includes User-Agent spoofing and duplicate URL detection.
+- **Async I/O:** Uses Zig 0.16.0's new `std.Io` runtime to spawn lightweight concurrent tasks instead of heavy OS threads.
+- **Zero-Allocation Parsing:** Uses efficient string splitting to find `href` tags without heavy DOM parsing.
+- **Polite Crawling:** Includes User-Agent spoofing and strict duplicate URL detection.
 - **Protocol Handling:** Normalizes relative URLs (e.g., `//google.com` or `/about`) to absolute URLs.
 
 ## Requirements
 
-- [Zig](https://ziglang.org/download/) (0.15.2)
+- **Zig 0.16.0-dev (Nightly)**
+  - _Note: This project relies on the experimental `std.Io` module which is only available in recent nightly builds._
 
-## Building
+## Building & Running
 
-To build the project for performance:
+### Quick Start
+
+To build and run the crawler in one step:
 
 ```bash
-cd src && zig build-exe spider.zig -Doptimize=ReleaseSafe or zig build
-
+zig build run -- [https://ziglang.org](https://ziglang.org)
 ```
