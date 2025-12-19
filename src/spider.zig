@@ -1,9 +1,7 @@
 const std = @import("std");
 
-// User Agent string
 const USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 
-// Global Mutex for synchronized printing
 var stdout_mutex = std.Thread.Mutex{};
 
 const Spider = struct {
@@ -101,7 +99,6 @@ pub fn main() !void {
     safePrint("\n🏁 Crawl finished. Visited {d} pages.\n", .{spider.visited.count()});
 }
 
-// FIX 1: Explicit `anyerror!void` return type to match futures list
 fn worker(io: std.Io, allocator: std.mem.Allocator, spider: *Spider) anyerror!void {
     var retries: usize = 0;
 
@@ -123,12 +120,9 @@ fn worker(io: std.Io, allocator: std.mem.Allocator, spider: *Spider) anyerror!vo
         var client = std.http.Client{ .allocator = allocator, .io = io };
         defer client.deinit();
 
-        // FIX 2: Use std.Io.Writer.Allocating instead of ArrayList
-        // This provides the .writer interface the new I/O system expects.
         var body = std.Io.Writer.Allocating.init(allocator);
         defer body.deinit();
 
-        // This .writer field is the interface struct (std.Io.Writer)
         const body_interface = &body.writer;
 
         const response = client.fetch(.{
