@@ -120,7 +120,7 @@ pub fn main() !void {
         try fut.await(io);
     }
 
-    safePrint("\n🏁 Crawl finished. Visited {d} pages.\n", .{spider.visited.count()});
+    safePrint("\n=== Crawl finished. Visited {d} pages. ===\n", .{spider.visited.count()});
 }
 
 fn worker(io: std.Io, allocator: std.mem.Allocator, spider: *Spider) anyerror!void {
@@ -142,14 +142,8 @@ fn worker(io: std.Io, allocator: std.mem.Allocator, spider: *Spider) anyerror!vo
 
         const uri = std.Uri.parse(target_url) catch continue;
 
-        // --- TIMESTAMP FIX START ---
-        // 1. Get POSIX time (CLOCK_REALTIME for wall clock)
-
-        // 2. Convert to nanoseconds using the Zig 0.16 field names (.sec, .nsec)
-
         var client = std.http.Client{ .allocator = allocator, .io = io };
         defer client.deinit();
-        // --- TIMESTAMP FIX END ---
 
         var body = std.Io.Writer.Allocating.init(allocator);
         defer body.deinit();
