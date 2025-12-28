@@ -6,7 +6,7 @@ A high-performance, async web crawler written in Zig. This tool connects to a se
 
 - **Async I/O:** Uses Zig 0.16.0's new `std.Io` runtime to spawn lightweight concurrent tasks instead of heavy OS threads.
 - **Zero-Allocation Parsing:** Uses efficient string splitting to find `href` tags without heavy DOM parsing.
-- **Polite Crawling:** Includes User-Agent spoofing and strict duplicate URL detection.
+- **Headers and Duplicate URL Detection:** Includes User-Agent spoofing and strict duplicate URL detection.
 - **Protocol Handling:** Normalizes relative URLs (e.g., `//google.com` or `/about`) to absolute URLs.
 
 ## Requirements

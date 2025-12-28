@@ -4,12 +4,27 @@ const USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36
 
 var stdout_mutex = std.Thread.Mutex{};
 
+const esc = "\x1B";
+const csi = esc ++ "[";
+const reset = csi ++ "0m";
+
+const Color = enum(u8) {
+    Default = 39,
+    Red = 31,
+    Green = 32,
+    Yellow = 33,
+    Blue = 34,
+    Magenta = 35,
+    Cyan = 36,
+    White = 37,
+};
+
 const Spider = struct {
     allocator: std.mem.Allocator,
-    mutex: std.Thread.Mutex = .{},
     queue: std.ArrayList([]const u8),
     visited: std.StringHashMap(void),
     base_host: []const u8,
+    mutex: std.Thread.Mutex = .{},
 
     pub fn init(allocator: std.mem.Allocator, seed_url: []const u8) !Spider {
         const uri = try std.Uri.parse(seed_url);
@@ -60,6 +75,17 @@ const Spider = struct {
     }
 };
 
+fn getStatusColor(status: std.http.Status) u8 {
+    const code = @intFromEnum(status);
+    return switch (code) {
+        200...299 => @intFromEnum(Color.Green),
+        300...399 => @intFromEnum(Color.Blue),
+        400...499 => @intFromEnum(Color.Red),
+        500...599 => @intFromEnum(Color.Yellow),
+        else => @intFromEnum(Color.White),
+    };
+}
+
 pub fn main() !void {
     var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
@@ -86,8 +112,6 @@ pub fn main() !void {
     defer futures.deinit(allocator);
 
     for (0..worker_count) |_| {
-        // We call the worker which now explicitly returns `anyerror!void`
-        // so it matches the ArrayList type.
         const fut = try io.concurrent(worker, .{ io, allocator, &spider });
         try futures.append(allocator, fut);
     }
@@ -106,7 +130,8 @@ fn worker(io: std.Io, allocator: std.mem.Allocator, spider: *Spider) anyerror!vo
         const target_url_opt = spider.getNextUrl();
 
         if (target_url_opt == null) {
-            try io.sleep(std.Io.Duration.fromNanoseconds(100 * std.time.ns_per_ms), .awake);
+            // Sleep for 100ms (100 * 1,000,000 nanoseconds)
+            try io.sleep(std.Io.Duration.fromNanoseconds(100 * 1_000_000), .awake);
             retries += 1;
             continue;
         }
@@ -117,8 +142,14 @@ fn worker(io: std.Io, allocator: std.mem.Allocator, spider: *Spider) anyerror!vo
 
         const uri = std.Uri.parse(target_url) catch continue;
 
+        // --- TIMESTAMP FIX START ---
+        // 1. Get POSIX time (CLOCK_REALTIME for wall clock)
+
+        // 2. Convert to nanoseconds using the Zig 0.16 field names (.sec, .nsec)
+
         var client = std.http.Client{ .allocator = allocator, .io = io };
         defer client.deinit();
+        // --- TIMESTAMP FIX END ---
 
         var body = std.Io.Writer.Allocating.init(allocator);
         defer body.deinit();
@@ -138,10 +169,10 @@ fn worker(io: std.Io, allocator: std.mem.Allocator, spider: *Spider) anyerror!vo
             continue;
         };
 
-        // safePrint("[{d}] {s}\n", .{ response.status, target_url });
-        safePrint("\x1b[32m[{d}]\x1b[0m {s}\n", .{ response.status, target_url });
+        const color_code = getStatusColor(response.status);
+        safePrint(csi ++ "{d}m[{d}]" ++ reset ++ " {s}\n", .{ color_code, @intFromEnum(response.status), target_url });
+
         if (response.status == .ok) {
-            // .written() returns the []const u8 slice of data
             const html = body.written();
             var it = std.mem.splitScalar(u8, html, '>');
 
@@ -152,7 +183,6 @@ fn worker(io: std.Io, allocator: std.mem.Allocator, spider: *Spider) anyerror!vo
 
                     if (std.mem.indexOf(u8, remainder, "\"")) |quote_end| {
                         const raw_url = remainder[0..quote_end];
-                        // URL Normalization
                         if (std.mem.startsWith(u8, raw_url, "//")) {
                             const full = std.fmt.allocPrint(allocator, "https:{s}", .{raw_url}) catch continue;
                             defer allocator.free(full);
