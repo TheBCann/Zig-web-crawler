@@ -16,7 +16,7 @@ jobs:
       - name: Setup Zig
         uses: mlugg/setup-zig@v1
         with:
-          version: master  # CHANGED: 'master' fetches the latest nightly (0.15.x)
+          version: master
 
       - name: Build
         run: zig build --verbose
