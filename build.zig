@@ -1,11 +1,9 @@
 const std = @import("std");
 
 pub fn build(b: *std.Build) void {
-    // 1. Standard Release/Debug options
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    // 2. Define the executable (Points to src/spider.zig)
     const exe = b.addExecutable(.{
         .name = "spider",
         .root_module = b.createModule(.{
@@ -15,10 +13,8 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
-    // 3. Install the artifact so 'zig build' creates zig-out/bin/spider
     b.installArtifact(exe);
 
-    // 4. Create the 'zig build run' step
     const run_cmd = b.addRunArtifact(exe);
     run_cmd.step.dependOn(b.getInstallStep());
 
@@ -26,6 +22,6 @@ pub fn build(b: *std.Build) void {
         run_cmd.addArgs(args);
     }
 
-    const run_step = b.step("run", "Run the app");
+    const run_step = b.step("run", "Run the spider");
     run_step.dependOn(&run_cmd.step);
 }
