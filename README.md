@@ -1,5 +1,6 @@
 # Zig Web Crawler
 
+<<<<<<< HEAD
 A high-performance, async web crawler written in Zig with robots.txt support, content deduplication, and priority-based crawling.
 
 ## Features
@@ -77,6 +78,62 @@ Done. Crawled 42 pages.
 4. **Pages** fetched, content hashed for dedup
 5. **Links** extracted, resolved, and queued (priority=50)
 6. **Repeat** until max_pages or queue empty
+=======
+A high-performance, concurrent web crawler written in Zig 0.16.0. Connects to a seed URL, extracts links, and recursively crawls them using Zig's new `std.Io` runtime with future-based concurrency.
+
+## Features
+
+- **Future-Based Concurrency:** Spawns 16 concurrent workers via `io.concurrent()` — no OS thread pool management needed.
+- **Content Deduplication:** SHA-256 fingerprinting detects duplicate content served at different URLs.
+- **Thread-Safe Frontier:** Priority queue with mutex protection and condition variable signaling — workers block instead of polling.
+- **Same-Host Enforcement:** Only follows links within the seed URL's domain.
+- **URL Normalization:** Resolves relative paths (`/about`), protocol-relative URLs (`//cdn.example.com`), and filters out `javascript:`, `mailto:`, and template strings.
+- **Clean Ownership Model:** Visited set owns all URL strings; frontier borrows them. No double-frees, no use-after-free.
+
+## Requirements
+
+- **Zig 0.16.0-dev (Nightly)** — requires the `std.Io` module available in recent nightly builds.
+
+## Usage
+
+```sh
+zig build -Doptimize=ReleaseSafe
+./zig-out/bin/spider https://example.com
+```
+
+Or run directly:
+
+```sh
+zig run src/spider.zig -- https://example.com
+```
+
+## Configuration
+
+Edit the `Config` struct in `main()`:
+
+```zig
+const config = Spider.Config{
+    .max_depth = 3,      // max link-following depth
+    .max_pages = 1000,   // stop after N pages crawled
+    .worker_count = 16,  // concurrent fetch workers
+};
+```
+
+## Architecture
+
+```
+main()
+ ├── Spider.init()          — seed URL, TLS bundle, frontier
+ ├── io.concurrent(worker)  — spawn N futures
+ │    └── worker loop:
+ │         ├── getNextBlocking()     — cond.wait() until work or shutdown
+ │         ├── client.fetch()        — HTTP GET via shared TLS client
+ │         ├── computeSignature()    — SHA-256 content fingerprint
+ │         ├── isContentDuplicate()  — skip if already seen
+ │         └── extractAndQueueLinks() — parse hrefs, addUrl() signals cond
+ └── fut.await(io)          — join all workers
+```
+>>>>>>> b82804a (refactor: fix ownership model, add cond var, bump workers to 16)
 
 ## License
 

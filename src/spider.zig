@@ -1,5 +1,9 @@
 const std = @import("std");
 const Io = std.Io;
+<<<<<<< HEAD
+=======
+const process = std.process;
+>>>>>>> b82804a (refactor: fix ownership model, add cond var, bump workers to 16)
 const crypto = std.crypto;
 
 const USER_AGENT = "Mozilla/5.0 (compatible; ZigSpider/1.0)";
@@ -36,6 +40,7 @@ pub const Page = struct {
             self.signature = hasher.finalResult();
         }
     }
+<<<<<<< HEAD
 };
 pub const RobotRules = struct {
     disallowed: std.ArrayList([]const u8),
@@ -148,13 +153,19 @@ pub const RobotRules = struct {
 
         return true;
     }
+=======
+>>>>>>> b82804a (refactor: fix ownership model, add cond var, bump workers to 16)
 };
 
 // =============================================================================
 // Frontier Entry (for priority queue)
 // =============================================================================
 const FrontierEntry = struct {
+<<<<<<< HEAD
     url: []const u8,
+=======
+    url: []const u8, // borrowed — owned by Spider.visited
+>>>>>>> b82804a (refactor: fix ownership model, add cond var, bump workers to 16)
     priority: u32,
     depth: u16,
 };
@@ -169,6 +180,7 @@ fn comparePriority(_: void, a: FrontierEntry, b: FrontierEntry) std.math.Order {
 pub const Spider = struct {
     allocator: std.mem.Allocator,
     io: Io,
+<<<<<<< HEAD
     mutex: std.Thread.Mutex = .{},
     frontier: std.PriorityQueue(FrontierEntry, void, comparePriority),
     visited: std.StringHashMap(void),
@@ -178,11 +190,31 @@ pub const Spider = struct {
     max_depth: u16,
     max_pages: usize,
     respect_robots: bool,
+=======
+
+    // Thread-safe state
+    mutex: std.Thread.Mutex = .{},
+    cond: std.Thread.Condition = .{},
+    frontier: std.PriorityQueue(FrontierEntry, void, comparePriority),
+    visited: std.StringHashMap(void),   // owns all URL strings
+    signatures: std.AutoHashMap([32]u8, void),
+
+    // Config
+    base_host: []const u8,
+    max_depth: u16,
+    max_pages: usize,
+
+    // TLS
+>>>>>>> b82804a (refactor: fix ownership model, add cond var, bump workers to 16)
     ca_bundle: crypto.Certificate.Bundle,
 
     // Stats
     crawled_count: usize = 0,
+<<<<<<< HEAD
     blocked_by_robots: usize = 0,
+=======
+    shutdown: bool = false,
+>>>>>>> b82804a (refactor: fix ownership model, add cond var, bump workers to 16)
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -204,6 +236,7 @@ pub const Spider = struct {
             .frontier = std.PriorityQueue(FrontierEntry, void, comparePriority).init(allocator, {}),
             .visited = std.StringHashMap(void).init(allocator),
             .signatures = std.AutoHashMap([32]u8, void).init(allocator),
+<<<<<<< HEAD
             .robot_rules = std.StringHashMap(RobotRules).init(allocator),
             .base_host = host,
             .max_depth = config.max_depth,
@@ -213,6 +246,15 @@ pub const Spider = struct {
         };
 
         try self.addUrl(seed_url, 100, 0); // High priority for seed
+=======
+            .base_host = host,
+            .max_depth = config.max_depth,
+            .max_pages = config.max_pages,
+            .ca_bundle = bundle,
+        };
+
+        try self.addUrl(seed_url, 100, 0);
+>>>>>>> b82804a (refactor: fix ownership model, add cond var, bump workers to 16)
         return self;
     }
 
@@ -220,13 +262,18 @@ pub const Spider = struct {
         self.ca_bundle.deinit(self.allocator);
         self.allocator.free(self.base_host);
 
+<<<<<<< HEAD
         // Free visited URLs
+=======
+        // visited owns all URL strings — free them here
+>>>>>>> b82804a (refactor: fix ownership model, add cond var, bump workers to 16)
         var it = self.visited.keyIterator();
         while (it.next()) |key| {
             self.allocator.free(key.*);
         }
         self.visited.deinit();
 
+<<<<<<< HEAD
         // Free remaining frontier URLs
         while (self.frontier.removeOrNull()) |entry| {
             self.allocator.free(entry.url);
@@ -273,6 +320,51 @@ pub const Spider = struct {
         self.mutex.lock();
         defer self.mutex.unlock();
 
+=======
+        // frontier URLs are borrowed from visited — just discard entries
+        self.frontier.deinit();
+
+        self.signatures.deinit();
+    }
+
+    pub const Config = struct {
+        max_depth: u16 = 3,
+        max_pages: usize = 100,
+        worker_count: usize = 4,
+    };
+
+    /// Thread-safe: get next URL to crawl, blocking if frontier is empty.
+    /// Returns null only when shutdown (max_pages reached or no work after retries).
+    /// Caller must NOT free entry.url — visited owns it.
+    pub fn getNextBlocking(self: *Spider) ?FrontierEntry {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        var empty_wakes: usize = 0;
+        while (empty_wakes < 5) {
+            if (self.shutdown) return null;
+
+            // Try to pull from frontier
+            while (self.frontier.removeOrNull()) |entry| {
+                if (entry.depth > self.max_depth) continue;
+                return entry;
+            }
+
+            // Frontier empty — wait for addUrl signal or shutdown broadcast
+            self.cond.wait(&self.mutex);
+            empty_wakes += 1;
+        }
+
+        return null; // woke up 5 times with nothing — assume done
+    }
+
+    /// Thread-safe: add URL to frontier.
+    /// visited takes ownership of the duped string; frontier borrows it.
+    pub fn addUrl(self: *Spider, url: []const u8, priority: u32, depth: u16) !void {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+>>>>>>> b82804a (refactor: fix ownership model, add cond var, bump workers to 16)
         if (self.visited.contains(url)) return;
 
         const owned = try self.allocator.dupe(u8, url);
@@ -280,10 +372,19 @@ pub const Spider = struct {
 
         try self.visited.put(owned, {});
         try self.frontier.add(.{
+<<<<<<< HEAD
             .url = try self.allocator.dupe(u8, url),
             .priority = priority,
             .depth = depth,
         });
+=======
+            .url = owned, // borrowed from visited
+            .priority = priority,
+            .depth = depth,
+        });
+
+        self.cond.signal();
+>>>>>>> b82804a (refactor: fix ownership model, add cond var, bump workers to 16)
     }
 
     /// Thread-safe: check if content already seen (by signature)
@@ -300,11 +401,16 @@ pub const Spider = struct {
         try self.signatures.put(sig, {});
     }
 
+<<<<<<< HEAD
     /// Thread-safe: increment crawl count
+=======
+    /// Thread-safe: increment crawl count, broadcast shutdown if max reached
+>>>>>>> b82804a (refactor: fix ownership model, add cond var, bump workers to 16)
     pub fn incrementCrawled(self: *Spider) void {
         self.mutex.lock();
         defer self.mutex.unlock();
         self.crawled_count += 1;
+<<<<<<< HEAD
     }
 
     pub fn incrementBlockedByRobots(self: *Spider) void {
@@ -357,12 +463,24 @@ pub const Spider = struct {
     }
 
     pub fn stats(self: *Spider) struct { crawled: usize, queued: usize, blocked: usize } {
+=======
+        if (self.crawled_count >= self.max_pages) {
+            self.shutdown = true;
+            self.cond.broadcast(); // wake all waiting workers
+        }
+    }
+
+    pub fn stats(self: *Spider) struct { crawled: usize, queued: usize } {
+>>>>>>> b82804a (refactor: fix ownership model, add cond var, bump workers to 16)
         self.mutex.lock();
         defer self.mutex.unlock();
         return .{
             .crawled = self.crawled_count,
             .queued = self.frontier.count(),
+<<<<<<< HEAD
             .blocked = self.blocked_by_robots,
+=======
+>>>>>>> b82804a (refactor: fix ownership model, add cond var, bump workers to 16)
         };
     }
 };
@@ -370,6 +488,7 @@ pub const Spider = struct {
 // =============================================================================
 // Worker
 // =============================================================================
+<<<<<<< HEAD
 fn fetchRobotsTxt(
     allocator: std.mem.Allocator,
     client: *std.http.Client,
@@ -616,8 +735,198 @@ pub fn main() !void {
     var threaded: Io.Threaded = .init(allocator, .{});
     defer threaded.deinit();
     const io = threaded.io();
+=======
+fn worker(io: Io, allocator: std.mem.Allocator, spider: *Spider) !void {
+    var client = std.http.Client{
+        .allocator = allocator,
+        .io = io,
+        .read_buffer_size = 64 * 1024,
+    };
+    client.ca_bundle = spider.ca_bundle;
+    defer {
+        client.ca_bundle = .{};
+        client.deinit();
+    }
 
-    var args = std.process.args();
+    while (true) {
+        const entry = spider.getNextBlocking() orelse break;
+
+        // entry.url is borrowed from visited — do NOT free it
+        var page = Page.init(try allocator.dupe(u8, entry.url));
+        page.depth = entry.depth;
+
+        // Fetch
+        const uri = std.Uri.parse(entry.url) catch {
+            page.deinit(allocator);
+            continue;
+        };
+        client.now = try Io.Clock.now(.real, io);
+
+        var body = Io.Writer.Allocating.init(allocator);
+        defer body.deinit();
+
+        const response = client.fetch(.{
+            .method = .GET,
+            .location = .{ .uri = uri },
+            .response_writer = &body.writer,
+            .headers = .{
+                .accept_encoding = .{ .override = "identity" },
+                .user_agent = .{ .override = USER_AGENT },
+            },
+        }) catch |err| {
+            safePrint(io, "❌ {s}: {}\n", .{ entry.url, err });
+            page.deinit(allocator);
+            continue;
+        };
+
+        printStatus(io, response.status, entry.url);
+
+        if (response.status != .ok) {
+            page.deinit(allocator);
+            continue;
+        }
+
+        page.contents = try allocator.dupe(u8, body.written());
+        page.computeSignature();
+
+        // Check for duplicate content
+        if (page.signature) |sig| {
+            if (spider.isContentDuplicate(sig)) {
+                page.deinit(allocator);
+                continue;
+            }
+            try spider.markContent(sig);
+        }
+
+        spider.incrementCrawled();
+
+        // Extract and queue links
+        if (page.contents) |html| {
+            extractAndQueueLinks(allocator, spider, html, entry.url, entry.depth + 1);
+        }
+
+        page.deinit(allocator);
+    }
+}
+
+// =============================================================================
+// Link Extraction
+// =============================================================================
+fn isValidHref(href: []const u8) bool {
+    if (href.len == 0) return false;
+    if (std.mem.endsWith(u8, href, ".")) return false;
+
+    for (href) |c| {
+        switch (c) {
+            '`', '\'', '(', ')', ',', '\n', '\r', ' ' => return false,
+            else => {},
+        }
+    }
+>>>>>>> b82804a (refactor: fix ownership model, add cond var, bump workers to 16)
+
+    return true;
+}
+
+fn extractAndQueueLinks(
+    allocator: std.mem.Allocator,
+    spider: *Spider,
+    html: []const u8,
+    base_url: []const u8,
+    depth: u16,
+) void {
+    var it = std.mem.splitScalar(u8, html, '>');
+    while (it.next()) |chunk| {
+        if (std.mem.indexOf(u8, chunk, "href=\"")) |found| {
+            const remainder = chunk[found + 6 ..];
+            if (std.mem.indexOf(u8, remainder, "\"")) |end| {
+                const href = remainder[0..end];
+
+                if (!isValidHref(href)) continue;
+
+                const resolved = resolveUrl(allocator, spider.base_host, base_url, href) catch continue;
+                defer allocator.free(resolved);
+
+                // Only follow same-host links
+                const uri = std.Uri.parse(resolved) catch continue;
+                if (uri.host) |h| {
+                    if (!std.mem.eql(u8, h.percent_encoded, spider.base_host)) continue;
+                }
+
+                spider.addUrl(resolved, 50, depth) catch {};
+            }
+        }
+    }
+}
+
+fn resolveUrl(
+    allocator: std.mem.Allocator,
+    base_host: []const u8,
+    base_url: []const u8,
+    href: []const u8,
+) ![]const u8 {
+    // Skip non-http schemes and template strings
+    if (std.mem.startsWith(u8, href, "javascript:") or
+        std.mem.startsWith(u8, href, "mailto:") or
+        std.mem.startsWith(u8, href, "data:") or
+        std.mem.startsWith(u8, href, "#") or
+        std.mem.indexOf(u8, href, "{{") != null or
+        std.mem.indexOf(u8, href, "${") != null)
+        return error.Skip;
+
+    if (std.mem.startsWith(u8, href, "http"))
+        return try allocator.dupe(u8, href);
+
+    if (std.mem.startsWith(u8, href, "//"))
+        return try std.fmt.allocPrint(allocator, "https:{s}", .{href});
+
+    if (std.mem.startsWith(u8, href, "/"))
+        return try std.fmt.allocPrint(allocator, "https://{s}{s}", .{ base_host, href });
+
+    // Relative path
+    const uri = try std.Uri.parse(base_url);
+    const path = uri.path.percent_encoded;
+    const last_slash = std.mem.lastIndexOf(u8, path, "/") orelse 0;
+    return try std.fmt.allocPrint(allocator, "https://{s}{s}/{s}", .{
+        base_host,
+        path[0..last_slash],
+        href,
+    });
+}
+
+// =============================================================================
+// Output Utilities
+// =============================================================================
+fn printStatus(io: Io, status: std.http.Status, url: []const u8) void {
+    const code = @intFromEnum(status);
+    const color: u8 = switch (code) {
+        200...299 => 32, // green
+        300...399 => 34, // blue
+        400...499 => 31, // red
+        else => 33, // yellow
+    };
+    safePrint(io, "\x1b[{d}m[{d}]\x1b[0m {s}\n", .{ color, code, url });
+}
+
+fn safePrint(io: Io, comptime fmt: []const u8, args: anytype) void {
+    stdout_mutex.lock();
+    defer stdout_mutex.unlock();
+
+    var buf: [4096]u8 = undefined;
+    var w = Io.File.stdout().writer(io, &buf);
+    w.interface.print(fmt, args) catch {};
+    w.interface.flush() catch {};
+}
+
+// =============================================================================
+// Main
+// =============================================================================
+pub fn main(init: process.Init) !void {
+    const allocator = init.gpa;
+    const arena = init.arena.allocator();
+    const io = init.io;
+
+    // CLI args
+    var args = try init.minimal.args.iterateAllocator(arena);
     _ = args.next();
     const seed = args.next() orelse {
         safePrint(io, "Usage: spider <url>\n", .{});
@@ -627,19 +936,27 @@ pub fn main() !void {
     const config = Spider.Config{
         .max_depth = 3,
         .max_pages = 1000,
+<<<<<<< HEAD
         .worker_count = 4,
         .respect_robots = true,
+=======
+        .worker_count = 16,
+>>>>>>> b82804a (refactor: fix ownership model, add cond var, bump workers to 16)
     };
 
     var spider = try Spider.init(allocator, io, seed, config);
     defer spider.deinit();
 
+<<<<<<< HEAD
     safePrint(io, "  Starting on {s} (depth={}, max={}, robots={})\n", .{
         seed,
         config.max_depth,
         config.max_pages,
         config.respect_robots,
     });
+=======
+    safePrint(io, "🕷️  Starting on {s} (depth={}, max={})\n", .{ seed, config.max_depth, config.max_pages });
+>>>>>>> b82804a (refactor: fix ownership model, add cond var, bump workers to 16)
 
     // Spawn workers
     const worker_args = .{ io, allocator, &spider };
