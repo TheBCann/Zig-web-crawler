@@ -1,13 +1,11 @@
 const std = @import("std");
 const Io = std.Io;
-const spider_mod = @import("spider.zig");
-const page_mod = @import("page.zig");
-const robots_mod = @import("robots.zig");
-const link_mod = @import("link.zig");
+const Spider = @import("spider.zig").Spider;
+const Page = @import("page.zig").Page;
+const RobotRules = @import("robots.zig").RobotRules;
 
-const Spider = spider_mod.Spider;
-const RobotRules = robots_mod.RobotRules;
-const Page = page_mod.Page;
+const extractLinks = @import("link.zig").extractLinks;
+
 
 const USER_AGENT = "Mozilla/5.0 (compatible; ZigSpider/1.0)";
 
@@ -15,7 +13,6 @@ pub fn run(io: Io, allocator: std.mem.Allocator, spider: *Spider) !void {
     var retries: usize = 0;
     var last_request_time: ?Io.Clock.Timestamp = null;
 
-    // Shared client — connection pool reuses TLS sessions across all workers
     const client = &spider.client;
 
     while (retries < 10) {
@@ -34,7 +31,6 @@ pub fn run(io: Io, allocator: std.mem.Allocator, spider: *Spider) !void {
         const host = if (uri.host) |h| h.percent_encoded else continue;
         const path = uri.path.percent_encoded;
 
-        // ── Robots.txt ──────────────────────────────────────────
 
         if (spider.config.respect_robots and !spider.hasRobotRules(host)) {
             spider.sink.print("Fetching robots.txt for {s}\n", .{host});
@@ -55,7 +51,6 @@ pub fn run(io: Io, allocator: std.mem.Allocator, spider: *Spider) !void {
             continue;
         }
 
-        // ── Crawl delay ─────────────────────────────────────────
 
         if (spider.getCrawlDelay(host)) |delay_ns| {
             if (last_request_time) |last| {
@@ -69,7 +64,6 @@ pub fn run(io: Io, allocator: std.mem.Allocator, spider: *Spider) !void {
             }
         }
 
-        // ── Fetch ───────────────────────────────────────────────
 
         var page = Page.init(try allocator.dupe(u8, entry.url));
         page.depth = entry.depth;
@@ -109,7 +103,6 @@ pub fn run(io: Io, allocator: std.mem.Allocator, spider: *Spider) !void {
             continue;
         }
 
-        // ── Process response ────────────────────────────────────
 
         page.contents = try allocator.dupe(u8, body.written());
         page.computeSignature();
@@ -141,10 +134,9 @@ pub fn run(io: Io, allocator: std.mem.Allocator, spider: *Spider) !void {
             .content_size = if (page.contents) |c| c.len else 0,
         });
 
-        // ── Extract and enqueue links ───────────────────────────
 
         if (page.contents) |html| {
-            var links = link_mod.extractLinks(allocator, html, spider.base_host, entry.url) catch {
+            var links = extractLinks(allocator, html, spider.base_host, entry.url) catch {
                 page.deinit(allocator);
                 continue;
             };

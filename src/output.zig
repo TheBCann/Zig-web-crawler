@@ -25,7 +25,6 @@ pub const OutputSink = struct {
         self.results.deinit(allocator);
     }
 
-    // ── Thread-safe printing ─────────────────────────────────────
 
     pub fn print(self: *OutputSink, comptime fmt: []const u8, args: anytype) void {
         self.mutex.lock(self.io) catch return;
@@ -48,7 +47,6 @@ pub const OutputSink = struct {
         self.print("\x1b[{d}m[{d}]\x1b[0m {s}\n", .{ color, code, url });
     }
 
-    // ── Structured result collection ─────────────────────────────
 
     pub fn record(self: *OutputSink, allocator: std.mem.Allocator, result: Result) void {
         const duped_url = allocator.dupe(u8, result.url) catch return;
@@ -62,13 +60,11 @@ pub const OutputSink = struct {
         };
         defer self.mutex.unlock(self.io);
 
-        // Try to append, free if fail
         self.results.append(allocator, stored_result) catch {
             allocator.free(duped_url);
         };
     }
 
-    // ── JSON serialization ───────────────────────────────────────
 
     pub fn toJson(self: *OutputSink, allocator: std.mem.Allocator) ![]u8 {
         self.mutex.lock(self.io) catch return error.LockFailed;

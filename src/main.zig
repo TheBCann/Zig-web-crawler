@@ -1,11 +1,10 @@
 const std = @import("std");
 const Io = std.Io;
 const posix = std.posix;
-const spider_mod = @import("spider.zig");
-const worker_mod = @import("worker.zig");
+const Spider = @import("spider.zig").Spider;
+const Config = @import("spider.zig").Config;
 
-const Spider = spider_mod.Spider;
-const Config = spider_mod.Config;
+const run = @import("worker.zig").run;
 
 var keep_running = std.atomic.Value(bool).init(true);
 
@@ -19,7 +18,6 @@ pub fn main(init: std.process.Init) !void {
     const arena = init.arena.allocator();
     const io = init.io;
 
-    // ── Parse args (arena — lives forever, no cleanup) ───────────
 
     const args = try init.minimal.args.toSlice(arena);
     const opts = parseArgs(args) orelse {
@@ -27,7 +25,6 @@ pub fn main(init: std.process.Init) !void {
         return;
     };
 
-    // ── Build config + spider (gpa — tracked, defer cleanup) ─────
 
     const config = Config{
         .max_depth = opts.depth,
@@ -54,26 +51,23 @@ pub fn main(init: std.process.Init) !void {
         config.worker_count,
     });
 
-    // ── Spawn workers ────────────────────────────────────────────
 
     const worker_args = .{ io, allocator, &spider };
-    const FutureType = @TypeOf(try io.concurrent(worker_mod.run, worker_args));
+    const FutureType = @TypeOf(try io.concurrent(run, worker_args));
 
     var futures: std.ArrayList(FutureType) = .empty;
     defer futures.deinit(allocator);
 
     for (0..config.worker_count) |_| {
-        const fut = try io.concurrent(worker_mod.run, worker_args);
+        const fut = try io.concurrent(run, worker_args);
         try futures.append(allocator, fut);
     }
 
-    // ── Await all workers ────────────────────────────────────────
 
     for (futures.items) |*fut| {
         try fut.await(io);
     }
 
-    // ── Report ───────────────────────────────────────────────────
 
     const s = spider.stats();
     spider.sink.print("\n🏁 Done. Crawled {} pages ({} blocked by robots.txt).\n", .{
@@ -82,15 +76,12 @@ pub fn main(init: std.process.Init) !void {
     });
 
     if (opts.out) |file_path| {
-        // Generate the JSON string
         const json = try spider.sink.toJson(allocator);
         defer allocator.free(json);
 
-        // Create the file in the current working directory
         var file = try std.Io.Dir.cwd().createFile(io, file_path, .{});
         defer file.close(io);
 
-        // Write data to file
         try file.writeStreamingAll(io, json);
 
         spider.sink.print("\n[*] Saved JSON results to {s}\n", .{file_path});
@@ -100,9 +91,6 @@ pub fn main(init: std.process.Init) !void {
     }
 }
 
-// =============================================================================
-// Arg parsing
-// =============================================================================
 const Options = struct {
     seed: []const u8,
     depth: u16 = 3,

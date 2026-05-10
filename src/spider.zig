@@ -1,15 +1,10 @@
 const std = @import("std");
 const Io = std.Io;
 const crypto = std.crypto;
-const frontier_mod = @import("frontier.zig");
-const robots_mod = @import("robots.zig");
-const output_mod = @import("output.zig");
-
-pub const Frontier = frontier_mod.Frontier;
-pub const FrontierEntry = frontier_mod.Entry;
-pub const RobotRules = robots_mod.RobotRules;
-pub const OutputSink = output_mod.OutputSink;
-pub const Result = output_mod.Result;
+const Frontier = @import("frontier.zig").Frontier;
+const FrontierEntry = @import("frontier.zig").Entry;
+const RobotRules = @import("robots.zig").RobotRules;
+const OutputSink = @import("output.zig").OutputSink;
 
 pub const Config = struct {
     max_depth: u16 = 3,
@@ -24,14 +19,12 @@ pub const Spider = struct {
     io: Io,
     config: Config,
 
-    // Thread-safe state (guarded by mutex)
     mutex: Io.Mutex = Io.Mutex.init,
     frontier: Frontier,
     robot_rules: std.StringHashMap(RobotRules),
     crawled_count: usize = 0,
     blocked_by_robots: usize = 0,
 
-    // Shared resources
     base_host: []const u8,
     client: std.http.Client,
     sink: OutputSink,
@@ -86,7 +79,6 @@ pub const Spider = struct {
         self.robot_rules.deinit();
     }
 
-    // ── Thread-safe frontier access ──────────────────────────────
 
     pub fn getNext(self: *Spider) ?FrontierEntry {
         if (!self.running.load(.seq_cst)) return null;
@@ -130,7 +122,6 @@ pub const Spider = struct {
         self.crawled_count += 1;
     }
 
-    // ── Thread-safe robots access ────────────────────────────────
 
     pub fn isAllowedByRobots(self: *Spider, host: []const u8, path: []const u8) bool {
         if (!self.config.respect_robots) return true;
@@ -178,7 +169,6 @@ pub const Spider = struct {
         self.blocked_by_robots += 1;
     }
 
-    // ── Stats ────────────────────────────────────────────────────
 
     pub const Stats = struct {
         crawled: usize,
